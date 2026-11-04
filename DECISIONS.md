@@ -257,6 +257,67 @@ A running record of every design decision for the Urja Meter Ops API, with the r
 
 ---
 
+## D12. Network endpoint: one tree, counts per node, computed once per refresh (refines D5)
+
+**Remember: `/v1/network` is built from the cached meters when they load, so it costs no portal calls and no work per request.**
+
+- **Chosen:** `GET /v1/network` returns `{ summary, tree }`. Each node has `level`, `code`, `name`, `path`, `counts` (`meters` and `byStatus`) and `children`; DT nodes also list `meterIds`. `summary` gives node counts per level and `codesUnderMultipleParents` (61 in the real data). A node's name is the most common name among its meters. Children are sorted by code, then path.
+- **Why:** browsing the network needs the whole shape at once (about 120 nodes, small). Building it during the dataset refresh means every request is a lookup.
+- **Rejected:** a node-by-node endpoint (`/v1/network/{path}`): more endpoints for a tree this small; meter filtering by `path` already covers drilling down.
+- **Trade-off:** the full tree is always returned; for a much larger network a `depth` or subtree parameter would be needed.
+- **Interview line:** "The tree is derived data, so I build it once per refresh and serve it from memory. Nodes are keyed by path, and the response says how many codes would have collided if I had keyed by code."
+- **Search topics:** building a tree from flat data, materialized path tree.
+
+---
+
+## D13. Query layer: in-memory filters, path prefix, near me, daily roll-up
+
+**Remember: filters run on the cached meters, paths match a node and everything under it, near me uses haversine, and daily usage counts each interval on the day it started.**
+
+- **Chosen:**
+  1. **Filters on `/v1/meters`:** `installStatus`, `phaseType`, `installType`, `build` (comma-separated lists), `make` (case-insensitive), `dt`, `path`, `q` (meterId or serial substring). Filter first, then page; `meta.total` counts the filtered meters.
+  2. **`path` prefix match:** `Z-01/C-01` matches that node and everything under it, case-insensitive; `Z-01/C-0` matches nothing (a partial code is not a parent). Paths, not single codes, because codes repeat (D5).
+  3. **Near me:** `near=lat,lng` plus `radiusKm` (default 2, max 50); results sorted by distance with `distanceKm`; meters without coordinates left out; `radiusKm` without `near` is a 400.
+  4. **Daily roll-up:** `granularity=daily` on the energy endpoint returns `days` instead of `readings`. Each interval's usage counts for the IST day the interval started on (for daily meters the 02/06 reading is 1 June usage). A day is `complete` only if all its intervals had a delta inside the window, so the last day of a window is marked incomplete. Computed from the cached raw window, so it costs no extra portal call.
+- **Why:** the brief's query extension (filters, near me) with the least machinery; the cache already holds everything.
+- **Scale note:** a linear scan plus haversine is fine to roughly 100k meters; beyond that, a database with indexes and a spatial index (PostGIS).
+- **Rejected:** a geo index or database now (overkill for 403 meters); attributing usage to the day the interval ends (wrong for daily meters: the 02/06 00:00 reading would count as 2 June usage).
+- **Trade-off:** the last day of a daily window is partial unless the window is extended by a day (consistent with D10).
+- **Interview line:** "I filter in memory because 403 meters fit trivially; I state where that stops working and what I would use instead. For daily usage, each interval belongs to the day it started, which is the only rule that is right for both half-hourly and daily meters."
+- **Search topics:** haversine formula, geospatial queries PostGIS, time series aggregation.
+
+---
+
+## D14. Robustness and testing: throttle, fake portal end to end, contract test
+
+**Remember: our own traffic is spaced 500 ms apart, the whole chain is tested against a fake portal over real HTTP, and real responses are checked against openapi.json.**
+
+- **Chosen:**
+  1. **Throttle in the portal client:** requests start at least `PORTAL_MIN_INTERVAL_MS` (500 ms) apart; each caller books the next slot synchronously, so parallel callers cannot start together. About 120 requests a minute at most.
+  2. **Fake portal server (`test/support/fake-portal.js`):** follows the real protocol (form login with Origin check and body-only failure, session cookie, HMAC export signature with its 5-minute window, 20-row pages, JSON 401/404/429 and HTML 404). End-to-end tests run the real app and real client against it over HTTP.
+  3. **Contract test:** every path in `openapi.json` has a case whose real response is validated with ajv (`ajv-formats` for dates); a test fails if a path is added without a case.
+  4. **Offline demo:** `npm run demo` runs the API and web client against the fake portal with synthetic data.
+- **Why:** the live portal is rate limited and must not be hit by tests; a fake that speaks the real protocol tests the client, signing and error mapping end to end. The contract test delivers the drift check promised in D7.
+- **Rejected:** mocking `fetch` only (does not exercise real HTTP, headers and cookies); recorded HTTP fixtures (would need many live requests to record); generating the spec from code (D7).
+- **Trade-off:** the fake portal encodes my understanding of the real one, so a shared misunderstanding would pass; the live smoke check guards against that. The throttle adds up to 500 ms per queued request under load.
+- **Interview line:** "I wrote a small fake of the portal that follows its real protocol, quirks included, so the end-to-end tests cover login, signing and error handling over real HTTP without touching the rate-limited portal. A contract test then checks every response against my OpenAPI spec."
+- **Search topics:** contract testing APIs, test doubles fake vs mock, token bucket rate limiting, ajv JSON schema validation.
+
+---
+
+## D15. Web client: one static page, no build step
+
+**Remember: `public/index.html` is plain JavaScript that only uses the public API; it shows a map, filters, meter details with repairs, and a daily usage chart.**
+
+- **Chosen:** a single HTML file served at `/` by `express.static`. Meter list with search, status and make filters; an SVG map of meter locations (equirectangular, positions to scale, no base map, colour by status); meter details with `dataQuality` flags; daily usage bar chart from `granularity=daily` (partial days lighter). All values are written with `textContent`, never `innerHTML`, so portal data cannot inject markup.
+- **Why:** shows the API being consumed end to end with no framework, bundler or CDN to install or explain.
+- **Rejected:** React or Vite (a build step and dependencies for one page); a tiled map library (external tiles and a CDN dependency).
+- **Trade-off:** no base map or street context; basic styling.
+- **Interview line:** "The client is deliberately tiny: one file, no build, and it only uses the public API, which is also a good test that the API is usable."
+- **Search topics:** vanilla JavaScript fetch API, SVG charts from scratch, XSS textContent vs innerHTML.
+
+---
+
 ## Build order (agreed)
 
 1. Core API + PROTOCOL.md + openapi.json + README + reflection (required, fully done)
@@ -266,3 +327,5 @@ A running record of every design decision for the Urja Meter Ops API, with the r
 5. Web client, only if time is left (map of meters + consumption chart)
 
 Each step leaves a complete submission, so work can stop at any point.
+
+**Status (4 Nov 2026):** all five steps are built. Steps 1 and 2: D1 to D11. Step 3: D12. Step 4: D13. Step 5: D15. Testing and robustness: D14.
