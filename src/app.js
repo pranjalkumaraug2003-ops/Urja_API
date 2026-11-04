@@ -1,5 +1,6 @@
 // Builds the Express app. Kept separate from server.js so tests can run it without opening a port.
 
+import { fileURLToPath } from 'node:url';
 import express from 'express';
 import swaggerUi from 'swagger-ui-express';
 import { createV1Router } from './http/routes.js';
@@ -17,6 +18,9 @@ export function createApp({ service, openapi }) {
   app.use('/docs', swaggerUi.serve, swaggerUi.setup(openapi));
 
   app.use('/v1', createV1Router(service));
+
+  // A small web client (public/index.html) that only uses the endpoints above.
+  app.use(express.static(fileURLToPath(new URL('../public', import.meta.url))));
 
   // Order matters: anything that reached here matched no route; errors from anywhere end in errorHandler.
   app.use(notFoundHandler);

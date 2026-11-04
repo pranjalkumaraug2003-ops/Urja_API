@@ -11,6 +11,7 @@
   "scripts": {
     "start": "node --env-file=.env src/server.js",
     "dev": "node --watch --env-file=.env src/server.js",
+    "demo": "node scripts/demo-offline.js",
     "test": "node --test",
     "smoke": "node --env-file=.env scripts/smoke-portal.js"
   },
