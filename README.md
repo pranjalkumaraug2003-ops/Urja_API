@@ -4,7 +4,8 @@ A clean, documented REST API over the **Urja Meter Ops** smart-meter portal, whi
 
 - **How the portal works:** [PROTOCOL.md](PROTOCOL.md)
 - **The API contract:** [openapi.json](openapi.json) (OpenAPI 3.0.3), served as Swagger UI at `/docs`
-- **Every design decision, with trade-offs:** [DECISIONS.md](DECISIONS.md) (D1 to D15)
+- **Every design decision, with trade-offs:** [DECISIONS.md](DECISIONS.md) (D1 to D16)
+- **A dashboard built only on the API:** `/` (see [Dashboard and API docs](#dashboard-and-api-docs))
 
 ## Quick start
 
@@ -14,7 +15,7 @@ Requires **Node.js 20.6 or newer** (uses built-in `fetch`, `--env-file` and the 
 npm install
 cp .env.example .env          # Windows PowerShell: Copy-Item .env.example .env
 # edit .env: PORTAL_EMAIL=operator@urja.local, PORTAL_PASSWORD=<from the assignment brief>
-npm start                     # API on http://localhost:3000, Swagger UI on /docs, web client on /
+npm start                     # dashboard on http://localhost:3000/, interactive API docs on /docs
 ```
 
 | Command | What it does |
@@ -38,9 +39,24 @@ Settings (`.env`): `PORTAL_URL`, `PORTAL_EMAIL`, `PORTAL_PASSWORD`, `PORT` (3000
 | `GET /v1/transformers` | The 40 DTs with feeder, capacity, path, meter count and name aliases |
 | `GET /health` | Cache and portal status (never calls the portal) |
 | `GET /docs`, `GET /openapi.json` | Swagger UI and the spec |
-| `GET /` | A small web client: map of meters, filters, daily usage chart |
+| `GET /` | Dashboard built only on this API: summary, meter list and network tree, map with "near me", meter details and consumption chart |
 
 Every success is `{ "data": ..., "meta": { "fetchedAt", "stale", ... } }`. Every error is `{ "error": { "code", "message", "details"? } }`.
+
+## Dashboard and API docs
+
+![Dashboard (offline demo data)](docs/dashboard.png)
+
+*Screenshot from `npm run demo` (synthetic data from the fake portal).*
+
+- **Dashboard (`/`):**
+    - Summary figures from `/v1/network`.
+    - A meter list with search, status and make filters, and a **network tree**: click a node to list the meters under it (`?path=`).
+    - A **map**: click anywhere to run a "near me" query (`?near=&radiusKm=`).
+    - Meter details with their data-quality repairs, and consumption as **daily kWh or per interval**.
+    - Every panel shows the exact API request it made, as a link.
+- **API docs (`/docs`):** Swagger UI on the hand-written `openapi.json`, with every endpoint listed open and a filter box. "Try it out" sends requests to the same server, whatever host or port it runs on.
+- **Navigation:** a shared bar on both pages links Dashboard, API docs, the OpenAPI JSON, `/health` and this repo, and shows the live service status.
 
 ## Sample requests
 
@@ -101,7 +117,8 @@ src/
     routes.js          the /v1 endpoints
     validate.js        zod schemas: strict, unknown params rejected
     errors.js          one error shape; portal failures -> 404/502/503/504
-public/index.html      web client (plain JavaScript, no build step)
+public/                dashboard: index.html, plus nav.js and nav.css shared with the API docs page
+docs/dashboard.png     screenshot for this README
 scripts/               smoke check against the live portal; offline demo
 test/                  unit, API, end-to-end and contract tests; a fake portal server
 ```
@@ -145,7 +162,7 @@ The full record, including rejected options, is in [DECISIONS.md](DECISIONS.md).
 
 ## Testing
 
-`npm test` runs 79 tests in about a second, with no network:
+`npm test` runs 80 tests in about a second, with no network:
 
 - **Unit tests:** signing (checked against an independent openssl result), the portal client (with a fake `fetch`), cleaning, energy, network, query, cache.
 - **API tests:** the real app through supertest, with a fake portal client.

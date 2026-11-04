@@ -318,6 +318,30 @@ A running record of every design decision for the Urja Meter Ops API, with the r
 
 ---
 
+## D16. Dashboard polish and reviewer-friendly API docs (refines D15)
+
+**Remember: one shared nav on the dashboard and the Swagger page, docs that "Try it out" against whatever server they run on, and a dashboard that shows the API call behind every panel.**
+
+- **Chosen:**
+  1. **Shared navigation (`public/nav.js`, `public/nav.css`):** Dashboard, API docs, OpenAPI JSON, Health, GitHub, plus a live status from `/health`. The dashboard loads it with a script tag; the Swagger page gets it through swagger-ui-express's `customJs` and `customCssUrl` options. Swagger's own top bar is hidden.
+  2. **Swagger UI options:** endpoints listed open, a filter box, request durations shown, "Try it out" enabled. The docs page uses a copy of the spec whose `servers` is `/`, so requests go to the same host and port; the served `openapi.json` is unchanged.
+  3. **Dashboard:**
+      - A summary strip from `/v1/network`.
+      - An "Explore the API" card with links to the docs and live example calls.
+      - A meters / network tab: clicking a tree node filters by `path`.
+      - A map click runs a "near me" query (with a radius picker and a drawn circle); filtered-out meters stay grey for context.
+      - Meter details with repairs.
+      - A daily or per-interval chart.
+      - Each panel's footer shows the request it made.
+  4. **Still one file, no build step, no CDN;** values from the API are written with `textContent`, never `innerHTML`.
+- **Why:** reviewers should find the docs in one click and get back just as easily, and the dashboard should demonstrate the API's features (hierarchy, query layer, daily roll-up) rather than only list data.
+- **Rejected:** a React or Vite rebuild (a build step and dependencies for the lowest-weighted, optional part); a custom docs page instead of Swagger UI (more code, less familiar to reviewers).
+- **Trade-off:** more front-end code to maintain in one file; the map still has no base layer.
+- **Interview line:** "I kept the client tiny but made it show the API at work: every panel prints the request behind it, and the docs and dashboard share one nav. Swagger's Try it out points at the same server, so it works wherever the service runs."
+- **Search topics:** Swagger UI configuration, OpenAPI servers relative URL, SVG maps from scratch, accessible navigation landmarks.
+
+---
+
 ## Build order (agreed)
 
 1. Core API + PROTOCOL.md + openapi.json + README + reflection (required, fully done)
@@ -328,4 +352,4 @@ A running record of every design decision for the Urja Meter Ops API, with the r
 
 Each step leaves a complete submission, so work can stop at any point.
 
-**Status (4 Nov 2026):** all five steps are built. Steps 1 and 2: D1 to D11. Step 3: D12. Step 4: D13. Step 5: D15. Testing and robustness: D14.
+**Status (4 Nov 2026):** all five steps are built. Steps 1 and 2: D1 to D11. Step 3: D12. Step 4: D13. Step 5: D15, polished in D16. Testing and robustness: D14.

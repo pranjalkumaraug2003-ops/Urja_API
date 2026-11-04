@@ -6,6 +6,21 @@ import swaggerUi from 'swagger-ui-express';
 import { createV1Router } from './http/routes.js';
 import { errorHandler, notFoundHandler } from './http/errors.js';
 
+// Swagger UI page options: our shared nav bar on top, Swagger's own top bar hidden, endpoints listed open.
+const DOCS_OPTIONS = {
+  customSiteTitle: 'Urja Meter Ops API docs',
+  customCssUrl: '/nav.css',
+  customJs: '/nav.js',
+  customCss: '.swagger-ui .topbar { display: none } body { margin: 0 } .swagger-ui .info { margin: 32px 0 16px }',
+  swaggerOptions: {
+    docExpansion: 'list',
+    defaultModelsExpandDepth: 0,
+    displayRequestDuration: true,
+    filter: true,
+    tryItOutEnabled: true,
+  },
+};
+
 export function createApp({ service, openapi }) {
   const app = express();
   app.disable('x-powered-by'); // do not advertise the framework in every response
@@ -13,9 +28,11 @@ export function createApp({ service, openapi }) {
   // Operations endpoint: bare body, read by monitoring tools (D8); never calls the portal.
   app.get('/health', (_req, res) => res.json(service.health()));
 
-  // The contract, as JSON and as Swagger UI.
+  // The contract, as JSON and as Swagger UI. For "Try it out", Swagger UI sends requests to this same
+  // server (a relative URL), whatever host and port it runs on; openapi.json itself keeps localhost:3000.
   app.get('/openapi.json', (_req, res) => res.json(openapi));
-  app.use('/docs', swaggerUi.serve, swaggerUi.setup(openapi));
+  const docsSpec = { ...openapi, servers: [{ url: '/', description: 'This server' }] };
+  app.use('/docs', swaggerUi.serve, swaggerUi.setup(docsSpec, DOCS_OPTIONS));
 
   app.use('/v1', createV1Router(service));
 

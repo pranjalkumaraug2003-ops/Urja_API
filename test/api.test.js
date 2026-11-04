@@ -222,3 +222,25 @@ test('/health: a portal failure makes it degraded; a 404 for one meter does not'
   assert.equal(health.status, 'degraded');
   assert.equal(health.portal.lastError, 'timeout');
 });
+
+test('the dashboard and the API docs share the nav, and docs "Try it out" targets this server', async () => {
+  const { app } = setup();
+
+  const home = await request(app).get('/').expect(200);
+  assert.match(home.headers['content-type'], /html/);
+  assert.match(home.text, /<script src="\/nav\.js"><\/script>/);
+
+  const nav = await request(app).get('/nav.js').expect(200);
+  assert.match(nav.text, /href: '\/docs', label: 'API docs'/);
+  await request(app).get('/nav.css').expect(200);
+
+  const docs = await request(app).get('/docs/').expect(200);
+  assert.match(docs.text, /<title>Urja Meter Ops API docs<\/title>/);
+  assert.match(docs.text, /src=['"]\/nav\.js['"]/);
+  assert.match(docs.text, /href=['"]\/nav\.css['"]/);
+
+  const init = await request(app).get('/docs/swagger-ui-init.js').expect(200);
+  assert.match(init.text, /"url": "\/"/); // servers overridden to a relative URL for the docs page only
+  const spec = await request(app).get('/openapi.json').expect(200);
+  assert.equal(spec.body.servers, undefined); // the served spec file itself is unchanged
+});

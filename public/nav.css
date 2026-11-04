@@ -1,0 +1,23 @@
+/* Shared top navigation for the dashboard (/) and the API docs (/docs). Used by nav.js. */
+.site-nav {
+  position: sticky; top: 0; z-index: 1000;
+  display: flex; align-items: center; gap: 4px;
+  height: 52px; padding: 0 20px;
+  background: #0f172a; color: #e2e8f0;
+  font: 14px/1 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+.site-nav .brand { display: flex; align-items: center; gap: 10px; margin-right: 18px; color: #fff; font-weight: 650; text-decoration: none; white-space: nowrap; }
+.site-nav .brand-mark { width: 22px; height: 22px; border-radius: 6px; background: linear-gradient(135deg, #38bdf8, #2563eb); display: inline-block; }
+.site-nav a.link { color: #cbd5e1; text-decoration: none; padding: 8px 12px; border-radius: 6px; white-space: nowrap; }
+.site-nav a.link:hover { background: rgba(255, 255, 255, 0.08); color: #fff; }
+.site-nav a.link.active { background: rgba(56, 189, 248, 0.16); color: #fff; }
+.site-nav .spacer { flex: 1; }
+.site-nav .status { display: flex; align-items: center; gap: 8px; font-size: 12px; color: #94a3b8; white-space: nowrap; }
+.site-nav .status i { width: 8px; height: 8px; border-radius: 50%; background: #64748b; display: inline-block; }
+.site-nav .status.ok i { background: #22c55e; }
+.site-nav .status.degraded i { background: #f59e0b; }
+@media (max-width: 760px) {
+  .site-nav { overflow-x: auto; }
+  .site-nav .status span { display: none; }
+}
