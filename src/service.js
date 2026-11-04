@@ -3,7 +3,9 @@
 
 import { createCache } from './cache.js';
 import { buildDataset } from './domain/normalise.js';
-import { buildEnergy } from './domain/energy.js';
+import { buildEnergy, rollUpDaily } from './domain/energy.js';
+import { buildNetwork } from './domain/network.js';
+import { queryMeters } from './domain/query.js';
 
 const DATASET_TTL_MS = 15 * 60 * 1000;
 const RECENT_ENERGY_TTL_MS = 15 * 60 * 1000;
@@ -26,7 +28,8 @@ export function createMeterService({ portal, now = () => Date.now(), cache } = {
       portalStatus.lastError = null;
       return value;
     } catch (err) {
-      portalStatus.lastError = err.kind ?? 'internal_error';
+      // A portal 404 for one meter says nothing about the portal's health.
+      if (err.kind !== 'not_found') portalStatus.lastError = err.kind ?? 'internal_error';
       throw err;
     }
   }
@@ -40,7 +43,8 @@ export function createMeterService({ portal, now = () => Date.now(), cache } = {
           const rawDts = await portal.getDts(); // sequential, not parallel: gentler on the rate limit
           const rawMeters = await portal.getMeterExport();
           const { meters, transformers } = buildDataset(rawMeters, rawDts);
-          return { meters, transformers, byId: new Map(meters.map((m) => [m.meterId, m])) };
+          // Derived views are built once per refresh, not per request.
+          return { meters, transformers, network: buildNetwork(meters), byId: new Map(meters.map((m) => [m.meterId, m])) };
         }),
       { ttlMs: DATASET_TTL_MS },
     );
@@ -54,11 +58,13 @@ export function createMeterService({ portal, now = () => Date.now(), cache } = {
   return {
     warmUp: getDataset,
 
-    async listMeters({ limit, offset }) {
+    // Filters first, then paging, so total counts the filtered meters.
+    async listMeters({ limit, offset, ...filters }) {
       const { value, fetchedAt, stale } = await getDataset();
+      const matching = queryMeters(value.meters, filters);
       return {
-        data: value.meters.slice(offset, offset + limit),
-        meta: { fetchedAt, stale, total: value.meters.length, limit, offset },
+        data: matching.slice(offset, offset + limit),
+        meta: { fetchedAt, stale, total: matching.length, limit, offset },
       };
     },
 
@@ -70,7 +76,7 @@ export function createMeterService({ portal, now = () => Date.now(), cache } = {
     },
 
     // Returns null for an unknown meter, checked against the cache first so a typo costs no portal call.
-    async getEnergy(meterId, { from, to }) {
+    async getEnergy(meterId, { from, to, granularity = 'raw' }) {
       const { value } = await getDataset();
       if (!value.byId.has(meterId)) return null;
 
@@ -80,7 +86,14 @@ export function createMeterService({ portal, now = () => Date.now(), cache } = {
         () => track(async () => buildEnergy({ meterId, from, to, rawReadings: await portal.getEnergy(meterId, { from, to }) })),
         { ttlMs },
       );
-      return { data: entry.value, meta: { fetchedAt: entry.fetchedAt, stale: entry.stale } };
+      // The raw window is cached; the daily roll-up is computed from it on the way out (cheap).
+      const data = granularity === 'daily' ? rollUpDaily(entry.value) : entry.value;
+      return { data, meta: { fetchedAt: entry.fetchedAt, stale: entry.stale } };
+    },
+
+    async getNetwork() {
+      const { value, fetchedAt, stale } = await getDataset();
+      return { data: value.network, meta: { fetchedAt, stale } };
     },
 
     async listTransformers() {
@@ -88,10 +101,11 @@ export function createMeterService({ portal, now = () => Date.now(), cache } = {
       return { data: value.transformers, meta: { fetchedAt, stale } };
     },
 
-    // Never calls the portal (D8).
+    // Never calls the portal (D8). Degraded = no data loaded yet, or the last portal call failed.
+    // Data that expired only because nobody asked for it is reported as stale but is not degraded.
     health() {
       const dataset = store.peek('dataset');
-      const degraded = dataset === null || dataset.stale || portalStatus.lastError !== null;
+      const degraded = dataset === null || portalStatus.lastError !== null;
       return {
         status: degraded ? 'degraded' : 'ok',
         cache: {

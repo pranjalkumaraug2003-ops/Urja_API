@@ -32,23 +32,77 @@ const isoDate = z
 
 const daysBetween = (from, to) => (Date.parse(to) - Date.parse(from)) / 86_400_000;
 
-export const schemas = {
-  meterListQuery: z.strictObject({
-    limit: wholeNumber(1, 500, 100),
-    offset: wholeNumber(0, Number.MAX_SAFE_INTEGER, 0),
-  }),
+// A comma-separated list of allowed values: "faulty,decommissioned" -> ['faulty', 'decommissioned'].
+const enumList = (values) =>
+  z
+    .string({ error: singleValue })
+    .transform((text) => text.split(',').map((v) => v.trim().toLowerCase()))
+    .refine((list) => list.every((v) => values.includes(v)), `must be one or more of: ${values.join(', ')}`)
+    .optional();
 
-  energyQuery: z.strictObject({ from: isoDate, to: isoDate }).superRefine((query, ctx) => {
-    // zod still runs this when a date failed its own check; comparing an impossible date
-    // (Date.parse rolls 2026-02-31 into March) would add a misleading second error.
-    if (!isRealDate(query.from) || !isRealDate(query.to)) return;
-    const days = daysBetween(query.from, query.to);
-    if (days < 0) {
-      ctx.addIssue({ code: 'custom', path: ['to'], message: 'must not be before from' });
-    } else if (days + 1 > MAX_RANGE_DAYS) {
-      ctx.addIssue({ code: 'custom', path: ['to'], message: `range must be at most ${MAX_RANGE_DAYS} days` });
-    }
-  }),
+const optionalText = (max) => z.string({ error: singleValue }).trim().min(1, 'must not be empty').max(max).optional();
+
+// "lat,lng", e.g. "26.91,75.79".
+const point = z
+  .string({ error: singleValue })
+  .regex(/^-?\d+(\.\d+)?,-?\d+(\.\d+)?$/, 'must be "lat,lng" in decimal degrees')
+  .transform((text) => {
+    const [lat, lng] = text.split(',').map(Number);
+    return { lat, lng };
+  })
+  .refine(({ lat, lng }) => Math.abs(lat) <= 90 && Math.abs(lng) <= 180, 'is outside valid latitude/longitude')
+  .optional();
+
+// Kilometres, decimals allowed, (0, 50].
+const radiusKm = z
+  .string({ error: singleValue })
+  .regex(/^\d+(\.\d+)?$/, 'must be a positive number')
+  .transform(Number)
+  .pipe(z.number().gt(0, 'must be greater than 0').max(50, 'must be at most 50'))
+  .optional();
+
+const DEFAULT_RADIUS_KM = 2;
+
+export const schemas = {
+  meterListQuery: z
+    .strictObject({
+      limit: wholeNumber(1, 500, 100),
+      offset: wholeNumber(0, Number.MAX_SAFE_INTEGER, 0),
+      installStatus: enumList(['installed', 'faulty', 'decommissioned']),
+      phaseType: enumList(['single', 'three']),
+      installType: enumList(['whole_current', 'ct_operated']),
+      build: enumList(['legacy', 'v2']),
+      make: optionalText(64),
+      dt: optionalText(32).transform((code) => code?.toUpperCase()),
+      path: optionalText(200).transform((p) => p?.replace(/\/+$/, '')), // a trailing slash is ignored
+      q: optionalText(32),
+      near: point,
+      radiusKm,
+    })
+    .superRefine((query, ctx) => {
+      if (query.radiusKm !== undefined && !query.near) {
+        ctx.addIssue({ code: 'custom', path: ['radiusKm'], message: 'needs near' });
+      }
+    })
+    .transform((query) => (query.near ? { ...query, radiusKm: query.radiusKm ?? DEFAULT_RADIUS_KM } : query)),
+
+  energyQuery: z
+    .strictObject({
+      from: isoDate,
+      to: isoDate,
+      granularity: z.enum(['raw', 'daily'], { error: 'must be raw or daily' }).optional().default('raw'),
+    })
+    .superRefine((query, ctx) => {
+      // zod still runs this when a date failed its own check; comparing an impossible date
+      // (Date.parse rolls 2026-02-31 into March) would add a misleading second error.
+      if (!isRealDate(query.from) || !isRealDate(query.to)) return;
+      const days = daysBetween(query.from, query.to);
+      if (days < 0) {
+        ctx.addIssue({ code: 'custom', path: ['to'], message: 'must not be before from' });
+      } else if (days + 1 > MAX_RANGE_DAYS) {
+        ctx.addIssue({ code: 'custom', path: ['to'], message: `range must be at most ${MAX_RANGE_DAYS} days` });
+      }
+    }),
 
   noQuery: z.strictObject({}),
 

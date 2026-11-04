@@ -32,7 +32,7 @@ function fakeFetch(handlers) {
 }
 
 function client(fetchImpl, extra = {}) {
-  return createPortalClient({ baseUrl: BASE, email: 'op@test', password: 'pw', fetchImpl, ...extra });
+  return createPortalClient({ baseUrl: BASE, email: 'op@test', password: 'pw', fetchImpl, minIntervalMs: 0, ...extra });
 }
 
 test('logs in once, then sends the session cookie on data requests', async () => {
@@ -140,4 +140,19 @@ test('after a 429 it stops calling the portal until the cooldown ends', async ()
 
   clock = 30_000;
   assert.deepEqual(await portal.getDts(), []);
+});
+
+test('throttle: requests start at least minIntervalMs apart', async () => {
+  const starts = [];
+  const fetchImpl = async () => {
+    starts.push(Date.now());
+    return starts.length === 1 ? LOGIN_OK() : json({ data: [], total: 0 });
+  };
+  const portal = client(fetchImpl, { minIntervalMs: 40 });
+  await Promise.all([portal.getDts(), portal.getDts()]);
+
+  assert.equal(starts.length, 3); // one login, two data calls
+  for (let i = 1; i < starts.length; i++) {
+    assert.ok(starts[i] - starts[i - 1] >= 35, `gap ${starts[i] - starts[i - 1]} ms is too short`);
+  }
 });

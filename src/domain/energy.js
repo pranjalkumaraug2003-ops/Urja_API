@@ -143,5 +143,40 @@ export function buildEnergy({ meterId, from, to, rawReadings }) {
   // Same offset everywhere, so ISO strings sort correctly as text. Sort is stable, so order within a timestamp is kept.
   dataQuality.sort((a, b) => (a.timestamp ?? '').localeCompare(b.timestamp ?? ''));
 
-  return { meterId, from, to, intervalMinutes, units: { ...ENERGY_UNITS }, readings, dataQuality };
+  return { meterId, from, to, granularity: 'raw', intervalMinutes, units: { ...ENERGY_UNITS }, readings, dataQuality };
+}
+
+const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
+
+// Calendar day (IST) on which the interval ending at this timestamp started.
+function intervalStartDay(timestamp, intervalMinutes) {
+  const start = Date.parse(timestamp) - intervalMinutes * 60_000;
+  return new Date(start + IST_OFFSET_MS).toISOString().slice(0, 10);
+}
+
+// Daily roll-up (build stage 4): usage per IST calendar day, from the per-interval deltas.
+// An interval counts for the day it STARTED on, so for daily meters the reading at 02/06 00:00 counts for
+// 1 June. A day is complete when every interval of that day had a usable delta inside the window.
+export function rollUpDaily(energy) {
+  const { readings, intervalMinutes, from, to } = energy;
+  const days = new Map();
+  if (intervalMinutes) {
+    const perDay = Math.round(1440 / intervalMinutes);
+    for (const reading of readings) {
+      if (reading.kwhDelta === null && reading.kvahDelta === null) continue;
+      const date = intervalStartDay(reading.timestamp, intervalMinutes);
+      if (date < from || date > to) continue; // usage of a day outside the window
+      const day = days.get(date) ?? { date, kwh: 0, kvah: 0, intervals: 0, expectedIntervals: perDay };
+      if (reading.kwhDelta !== null) day.kwh += reading.kwhDelta;
+      if (reading.kvahDelta !== null) day.kvah += reading.kvahDelta;
+      day.intervals += 1;
+      days.set(date, day);
+    }
+  }
+  const rounded = [...days.values()]
+    .sort((a, b) => a.date.localeCompare(b.date))
+    .map((d) => ({ ...d, kwh: roundDelta(d.kwh), kvah: roundDelta(d.kvah), complete: d.intervals >= d.expectedIntervals }));
+
+  const { readings: _readings, ...rest } = energy;
+  return { ...rest, granularity: 'daily', days: rounded };
 }

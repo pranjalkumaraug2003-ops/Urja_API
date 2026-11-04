@@ -202,3 +202,23 @@ test('unknown routes get the same error shape; the spec is served', async () => 
   const spec = await request(app).get('/openapi.json').expect(200);
   assert.equal(spec.body.openapi, '3.0.3');
 });
+
+test('/health: a portal failure makes it degraded; a 404 for one meter does not', async () => {
+  const portal = fakePortal();
+  portal.getEnergy = async () => {
+    throw new PortalError('not_found', 'no such meter in the portal');
+  };
+  const service = createMeterService({ portal, now: () => Date.parse('2026-11-04T06:00:00Z') });
+  const app = createApp({ service, openapi: {} });
+
+  await request(app).get('/v1/meters/J100001/energy?from=2026-06-01&to=2026-06-01').expect(404);
+  assert.equal((await request(app).get('/health').expect(200)).body.status, 'ok');
+
+  portal.getEnergy = async () => {
+    throw new PortalError('timeout', 'slow');
+  };
+  await request(app).get('/v1/meters/J100002/energy?from=2026-06-01&to=2026-06-01').expect(504);
+  const health = (await request(app).get('/health').expect(200)).body;
+  assert.equal(health.status, 'degraded');
+  assert.equal(health.portal.lastError, 'timeout');
+});

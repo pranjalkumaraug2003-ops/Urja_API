@@ -33,6 +33,11 @@ export function createV1Router(service) {
     res.json(result);
   });
 
+  router.get('/network', async (req, res) => {
+    parse(schemas.noQuery, req.query);
+    res.json(await service.getNetwork());
+  });
+
   router.get('/transformers', async (req, res) => {
     parse(schemas.noQuery, req.query);
     res.json(await service.listTransformers());

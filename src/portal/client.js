@@ -15,6 +15,8 @@ const MAX_DT_PAGES = 50;
 // recovery took 10 to 25 s in tests, so 30 s is a safe pause (PROTOCOL.md, rate limiting).
 const RATE_LIMIT_COOLDOWN_MS = 30_000;
 
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
 // One error type for everything that can go wrong with the portal.
 // "kind" is what the HTTP layer uses to choose our status code (D6).
 export class PortalError extends Error {
@@ -32,6 +34,7 @@ export function createPortalClient({
   email,
   password,
   timeoutMs = 10_000,
+  minIntervalMs = 500, // throttle: at most one request starts per interval (about 120 per minute)
   fetchImpl = fetch,
   now = () => Date.now(),
 }) {
@@ -39,6 +42,17 @@ export function createPortalClient({
   let loggedInAt = 0;
   let loginInFlight = null; // shared promise, so parallel requests trigger only one login
   let blockedUntil = 0; // set after a 429: no portal calls before this time
+  let nextSlotAt = 0; // throttle: when the next request may start
+
+  // Spaces requests out so a burst of our own traffic cannot trip the portal's rate limit.
+  // Each caller books the next free slot synchronously, then waits for it.
+  async function waitForSlot() {
+    if (minIntervalMs <= 0) return;
+    const current = now();
+    const slot = Math.max(current, nextSlotAt);
+    nextSlotAt = slot + minIntervalMs;
+    if (slot > current) await sleep(slot - current);
+  }
 
   // Records a 429 and returns the error to throw.
   function rateLimited(context) {
@@ -63,6 +77,7 @@ export function createPortalClient({
   async function send(path, { method = 'GET', query, headers = {}, body } = {}) {
     const url = new URL(path, baseUrl);
     if (query) url.search = query;
+    await waitForSlot();
     try {
       return await fetchImpl(url, {
         method,

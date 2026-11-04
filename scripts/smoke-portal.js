@@ -11,6 +11,7 @@ const portal = createPortalClient({
   email: config.portalEmail,
   password: config.portalPassword,
   timeoutMs: config.portalTimeoutMs,
+  minIntervalMs: config.portalMinIntervalMs,
 });
 
 try {

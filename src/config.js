@@ -26,5 +26,6 @@ export function loadConfig(env = process.env) {
     portalPassword: required(env, 'PORTAL_PASSWORD'),
     port: positiveInt(env, 'PORT', 3000),
     portalTimeoutMs: positiveInt(env, 'PORTAL_TIMEOUT_MS', 10_000),
+    portalMinIntervalMs: positiveInt(env, 'PORTAL_MIN_INTERVAL_MS', 500),
   });
 }
