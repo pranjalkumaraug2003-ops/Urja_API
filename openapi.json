@@ -1,0 +1,451 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Urja Meter Ops API",
+    "version": "1.0.0",
+    "description": "A clean, documented API over the Urja Meter Ops smart-meter portal (which has no API of its own). Data is read from the portal, cleaned (types, ISO 8601 timestamps, repaired hierarchy), cached in memory, and served here. Every repair is listed in a `dataQuality` array. Every success response is `{ data, meta }`; every error is `{ error }`. Unknown query parameters are rejected with 400. See PROTOCOL.md for how the portal works."
+  },
+  "servers": [
+    { "url": "http://localhost:3000", "description": "Local development (port set by the PORT environment variable)" }
+  ],
+  "tags": [
+    { "name": "Meters", "description": "Smart meters, their network position and their energy readings" },
+    { "name": "Transformers", "description": "Distribution transformers (DTs)" },
+    { "name": "Operations", "description": "Service health" }
+  ],
+  "paths": {
+    "/v1/meters": {
+      "get": {
+        "tags": ["Meters"],
+        "summary": "List meters",
+        "description": "Returns full, cleaned meter records, paginated with limit and offset. Ordered by meterId.",
+        "operationId": "listMeters",
+        "parameters": [
+          { "$ref": "#/components/parameters/Limit" },
+          { "$ref": "#/components/parameters/Offset" }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of meters",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["data", "meta"],
+                  "properties": {
+                    "data": { "type": "array", "items": { "$ref": "#/components/schemas/Meter" } },
+                    "meta": { "$ref": "#/components/schemas/PageMeta" }
+                  }
+                }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "500": { "$ref": "#/components/responses/InternalError" },
+          "502": { "$ref": "#/components/responses/UpstreamError" },
+          "503": { "$ref": "#/components/responses/UpstreamUnavailable" },
+          "504": { "$ref": "#/components/responses/UpstreamTimeout" }
+        }
+      }
+    },
+    "/v1/meters/{meterId}": {
+      "get": {
+        "tags": ["Meters"],
+        "summary": "Get one meter",
+        "operationId": "getMeter",
+        "parameters": [{ "$ref": "#/components/parameters/MeterId" }],
+        "responses": {
+          "200": {
+            "description": "The meter",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["data", "meta"],
+                  "properties": {
+                    "data": { "$ref": "#/components/schemas/Meter" },
+                    "meta": { "$ref": "#/components/schemas/Meta" }
+                  }
+                }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "500": { "$ref": "#/components/responses/InternalError" },
+          "502": { "$ref": "#/components/responses/UpstreamError" },
+          "503": { "$ref": "#/components/responses/UpstreamUnavailable" },
+          "504": { "$ref": "#/components/responses/UpstreamTimeout" }
+        }
+      }
+    },
+    "/v1/meters/{meterId}/energy": {
+      "get": {
+        "tags": ["Meters"],
+        "summary": "Get energy readings for one meter",
+        "description": "Returns cumulative register readings (kwh, kvah are odometer-style totals, not consumption) plus kwhDelta and kvahDelta, the usage during the interval ending at each timestamp. intervalMinutes is detected from the data (30 or 1440 in the current dataset). Both from and to are required, inclusive, and interpreted in IST; the range may span at most 31 days. A window with no data returns 200 with an empty readings list.",
+        "operationId": "getMeterEnergy",
+        "parameters": [
+          { "$ref": "#/components/parameters/MeterId" },
+          { "$ref": "#/components/parameters/From" },
+          { "$ref": "#/components/parameters/To" }
+        ],
+        "responses": {
+          "200": {
+            "description": "Readings for the requested window",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["data", "meta"],
+                  "properties": {
+                    "data": { "$ref": "#/components/schemas/Energy" },
+                    "meta": { "$ref": "#/components/schemas/Meta" }
+                  }
+                }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "500": { "$ref": "#/components/responses/InternalError" },
+          "502": { "$ref": "#/components/responses/UpstreamError" },
+          "503": { "$ref": "#/components/responses/UpstreamUnavailable" },
+          "504": { "$ref": "#/components/responses/UpstreamTimeout" }
+        }
+      }
+    },
+    "/v1/transformers": {
+      "get": {
+        "tags": ["Transformers"],
+        "summary": "List distribution transformers",
+        "description": "All DTs with their feeder, capacity, network path and number of meters. Small fixed list, so not paginated.",
+        "operationId": "listTransformers",
+        "responses": {
+          "200": {
+            "description": "All transformers",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["data", "meta"],
+                  "properties": {
+                    "data": { "type": "array", "items": { "$ref": "#/components/schemas/Transformer" } },
+                    "meta": { "$ref": "#/components/schemas/Meta" }
+                  }
+                }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "500": { "$ref": "#/components/responses/InternalError" },
+          "502": { "$ref": "#/components/responses/UpstreamError" },
+          "503": { "$ref": "#/components/responses/UpstreamUnavailable" },
+          "504": { "$ref": "#/components/responses/UpstreamTimeout" }
+        }
+      }
+    },
+    "/health": {
+      "get": {
+        "tags": ["Operations"],
+        "summary": "Service health",
+        "description": "Reports process and cache status. Never calls the portal. Returns 200 while the process is running; status is degraded when cached data is stale or the last portal call failed. Not wrapped in the data/meta envelope, because it is read by monitoring tools.",
+        "operationId": "getHealth",
+        "responses": {
+          "200": {
+            "description": "Health report",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/Health" } }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "parameters": {
+      "MeterId": {
+        "name": "meterId",
+        "in": "path",
+        "required": true,
+        "description": "Meter ID. Case-insensitive (j100001 and J100001 are the same meter).",
+        "schema": { "type": "string", "minLength": 1, "maxLength": 32, "example": "J100001" }
+      },
+      "Limit": {
+        "name": "limit",
+        "in": "query",
+        "required": false,
+        "description": "Maximum number of items to return.",
+        "schema": { "type": "integer", "minimum": 1, "maximum": 500, "default": 100 }
+      },
+      "Offset": {
+        "name": "offset",
+        "in": "query",
+        "required": false,
+        "description": "Number of items to skip.",
+        "schema": { "type": "integer", "minimum": 0, "default": 0 }
+      },
+      "From": {
+        "name": "from",
+        "in": "query",
+        "required": true,
+        "description": "First day of the window, inclusive, IST.",
+        "schema": { "type": "string", "format": "date", "example": "2026-06-01" }
+      },
+      "To": {
+        "name": "to",
+        "in": "query",
+        "required": true,
+        "description": "Last day of the window, inclusive (the whole day), IST. Must not be before from; at most 31 days after from counting both ends.",
+        "schema": { "type": "string", "format": "date", "example": "2026-06-03" }
+      }
+    },
+    "schemas": {
+      "Meta": {
+        "type": "object",
+        "description": "Freshness of the data in this response.",
+        "required": ["fetchedAt", "stale"],
+        "properties": {
+          "fetchedAt": { "type": "string", "format": "date-time", "description": "When this data was last fetched from the portal (UTC).", "example": "2026-11-04T08:15:00.000Z" },
+          "stale": { "type": "boolean", "description": "True when the data is older than its freshness window: served while a refresh runs, or because the portal is unavailable.", "example": false }
+        }
+      },
+      "PageMeta": {
+        "allOf": [
+          { "$ref": "#/components/schemas/Meta" },
+          {
+            "type": "object",
+            "required": ["total", "limit", "offset"],
+            "properties": {
+              "total": { "type": "integer", "description": "Total number of items across all pages.", "example": 403 },
+              "limit": { "type": "integer", "example": 100 },
+              "offset": { "type": "integer", "example": 0 }
+            }
+          }
+        ]
+      },
+      "DataQualityIssue": {
+        "type": "object",
+        "description": "One repair or warning about the source data. Routine format conversions (numeric strings, date format) are not listed; content repairs are. Known issue / action pairs: blank_in_source / filled_from_dt_siblings, filled_from_portal_dts, filled_from_dt_code or left_null; not_a_number / left_null; conflicting_name_in_source / replaced_with_portal_dts_name (meters) or portal_dts_name_kept_alias_recorded (transformers); duplicate_incomplete_row or duplicate_row / dropped; invalid_timestamp / dropped; gap_before / delta_spans_gap; negative_delta / delta_set_null.",
+        "required": ["issue", "action"],
+        "properties": {
+          "field": { "type": "string", "description": "Dotted path of the affected field. On energy responses this names the reading field (kwh, kvah, voltageR, kwhDelta, kvahDelta).", "example": "hierarchy.circle.code" },
+          "timestamp": { "type": "string", "format": "date-time", "description": "Timestamp of the affected reading (energy responses).", "example": "2026-06-30T00:00:00+05:30" },
+          "issue": { "type": "string", "example": "blank_in_source" },
+          "action": { "type": "string", "example": "filled_from_dt_siblings" },
+          "sourceValue": { "type": "string", "description": "The original portal value, when it was replaced or dropped.", "example": "Old Malviya Nagar Xfmr" }
+        }
+      },
+      "HierarchyNode": {
+        "type": "object",
+        "required": ["code", "name"],
+        "properties": {
+          "code": { "type": "string", "nullable": true, "description": "Code of the node. Unique only within its parent, so use the path to identify a node.", "example": "C-06" },
+          "name": { "type": "string", "nullable": true, "example": "Circle 6" }
+        }
+      },
+      "Hierarchy": {
+        "type": "object",
+        "description": "Position of a meter in the network, from zone down to DT.",
+        "required": ["path", "zone", "circle", "division", "subdivision", "substation", "feeder", "dt"],
+        "properties": {
+          "path": { "type": "string", "description": "Codes from zone to DT joined by '/'. This identifies a node, because codes repeat under different parents. A code that could not be repaired appears as 'unknown'.", "example": "Z-01/C-06/D-02/SD-03/SS-04/F-006/DT-011" },
+          "zone": { "$ref": "#/components/schemas/HierarchyNode" },
+          "circle": { "$ref": "#/components/schemas/HierarchyNode" },
+          "division": { "$ref": "#/components/schemas/HierarchyNode" },
+          "subdivision": { "$ref": "#/components/schemas/HierarchyNode" },
+          "substation": { "$ref": "#/components/schemas/HierarchyNode" },
+          "feeder": { "$ref": "#/components/schemas/HierarchyNode" },
+          "dt": { "$ref": "#/components/schemas/HierarchyNode" }
+        }
+      },
+      "Meter": {
+        "type": "object",
+        "required": ["meterId", "serialNo", "make", "phaseType", "installStatus", "installType", "build", "location", "hierarchy", "dataQuality"],
+        "properties": {
+          "meterId": { "type": "string", "example": "J100011" },
+          "serialNo": { "type": "string", "description": "Serial number. Its prefix does not indicate the make.", "example": "SE12345" },
+          "make": { "type": "string", "example": "Genus" },
+          "phaseType": { "type": "string", "enum": ["single", "three"] },
+          "installStatus": { "type": "string", "enum": ["installed", "faulty", "decommissioned"], "description": "Decommissioned meters may still report readings; this is reported as the source states it." },
+          "installType": { "type": "string", "enum": ["whole_current", "ct_operated"] },
+          "build": { "type": "string", "enum": ["legacy", "v2"], "description": "Meter firmware/record generation as reported by the portal export." },
+          "location": {
+            "type": "object",
+            "required": ["lat", "lng"],
+            "properties": {
+              "lat": { "type": "number", "nullable": true, "example": 26.93896 },
+              "lng": { "type": "number", "nullable": true, "example": 75.83096 }
+            }
+          },
+          "hierarchy": { "$ref": "#/components/schemas/Hierarchy" },
+          "dataQuality": { "type": "array", "items": { "$ref": "#/components/schemas/DataQualityIssue" } }
+        }
+      },
+      "Reading": {
+        "type": "object",
+        "required": ["timestamp", "kwh", "kvah", "voltageR", "kwhDelta", "kvahDelta"],
+        "properties": {
+          "timestamp": { "type": "string", "format": "date-time", "description": "End of the interval, ISO 8601 with IST offset.", "example": "2026-06-01T00:30:00+05:30" },
+          "kwh": { "type": "number", "nullable": true, "description": "Cumulative active energy register (odometer), not consumption.", "example": 42594.61 },
+          "kvah": { "type": "number", "nullable": true, "description": "Cumulative apparent energy register.", "example": 45121.02 },
+          "voltageR": { "type": "number", "nullable": true, "description": "R-phase voltage at the reading time. Never differenced.", "example": 230.9 },
+          "kwhDelta": { "type": "number", "nullable": true, "description": "Active energy used during the interval ending at this timestamp. Null for the first reading in the window or after a negative jump.", "example": 0.49 },
+          "kvahDelta": { "type": "number", "nullable": true, "description": "Apparent energy used during the interval ending at this timestamp.", "example": 0.52 }
+        }
+      },
+      "Energy": {
+        "type": "object",
+        "required": ["meterId", "from", "to", "intervalMinutes", "units", "readings", "dataQuality"],
+        "properties": {
+          "meterId": { "type": "string", "example": "J100001" },
+          "from": { "type": "string", "format": "date", "example": "2026-06-01" },
+          "to": { "type": "string", "format": "date", "example": "2026-06-03" },
+          "intervalMinutes": { "type": "integer", "nullable": true, "description": "Most common gap between readings. Null when there are fewer than two readings.", "example": 30 },
+          "units": {
+            "type": "object",
+            "required": ["kwh", "kvah", "voltageR", "kwhDelta", "kvahDelta"],
+            "properties": {
+              "kwh": { "type": "string", "example": "kWh" },
+              "kvah": { "type": "string", "example": "kVAh" },
+              "voltageR": { "type": "string", "example": "V" },
+              "kwhDelta": { "type": "string", "example": "kWh" },
+              "kvahDelta": { "type": "string", "example": "kVAh" }
+            }
+          },
+          "readings": { "type": "array", "items": { "$ref": "#/components/schemas/Reading" } },
+          "dataQuality": { "type": "array", "items": { "$ref": "#/components/schemas/DataQualityIssue" } }
+        }
+      },
+      "Transformer": {
+        "type": "object",
+        "required": ["code", "name", "aliases", "feederCode", "capacityKva", "path", "meterCount", "dataQuality"],
+        "properties": {
+          "code": { "type": "string", "example": "DT-007" },
+          "name": { "type": "string", "description": "Official name from the portal's transformer list.", "example": "Sanganer DT 7" },
+          "aliases": { "type": "array", "items": { "type": "string" }, "description": "Other names found for this DT in meter records.", "example": ["Old Malviya Nagar Xfmr"] },
+          "feederCode": { "type": "string", "example": "F-007" },
+          "capacityKva": { "type": "number", "example": 250 },
+          "path": { "type": "string", "nullable": true, "description": "Network path of this DT, taken from its meters. Null if it has no meters.", "example": "Z-01/C-02/D-01/SD-02/SS-03/F-007/DT-007" },
+          "meterCount": { "type": "integer", "example": 13 },
+          "dataQuality": { "type": "array", "items": { "$ref": "#/components/schemas/DataQualityIssue" } }
+        }
+      },
+      "Health": {
+        "type": "object",
+        "required": ["status", "cache", "portal"],
+        "properties": {
+          "status": { "type": "string", "enum": ["ok", "degraded"] },
+          "cache": {
+            "type": "object",
+            "required": ["meters", "energyEntries"],
+            "properties": {
+              "meters": {
+                "type": "object",
+                "required": ["count", "fetchedAt", "stale"],
+                "properties": {
+                  "count": { "type": "integer", "example": 403 },
+                  "fetchedAt": { "type": "string", "format": "date-time", "nullable": true },
+                  "stale": { "type": "boolean" }
+                }
+              },
+              "energyEntries": { "type": "integer", "description": "Number of cached energy windows.", "example": 12 }
+            }
+          },
+          "portal": {
+            "type": "object",
+            "required": ["lastSuccessAt", "lastError"],
+            "properties": {
+              "lastSuccessAt": { "type": "string", "format": "date-time", "nullable": true },
+              "lastError": { "type": "string", "nullable": true, "description": "Error code of the last failed portal call, if the most recent call failed.", "example": null }
+            }
+          }
+        }
+      },
+      "Error": {
+        "type": "object",
+        "required": ["error"],
+        "properties": {
+          "error": {
+            "type": "object",
+            "required": ["code", "message"],
+            "properties": {
+              "code": { "type": "string", "enum": ["validation_error", "not_found", "internal_error", "upstream_error", "upstream_unavailable", "upstream_timeout"] },
+              "message": { "type": "string" },
+              "details": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": ["param", "issue"],
+                  "properties": {
+                    "param": { "type": "string", "example": "from" },
+                    "issue": { "type": "string", "example": "must be a date in YYYY-MM-DD format" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "responses": {
+      "BadRequest": {
+        "description": "Invalid or unknown parameters",
+        "content": {
+          "application/json": {
+            "schema": { "$ref": "#/components/schemas/Error" },
+            "example": { "error": { "code": "validation_error", "message": "Invalid request parameters.", "details": [{ "param": "from", "issue": "must be a date in YYYY-MM-DD format" }, { "param": "start", "issue": "unknown parameter" }] } }
+          }
+        }
+      },
+      "NotFound": {
+        "description": "Meter or route not found",
+        "content": {
+          "application/json": {
+            "schema": { "$ref": "#/components/schemas/Error" },
+            "example": { "error": { "code": "not_found", "message": "Meter J999999 not found." } }
+          }
+        }
+      },
+      "InternalError": {
+        "description": "Unexpected error in this service",
+        "content": {
+          "application/json": {
+            "schema": { "$ref": "#/components/schemas/Error" },
+            "example": { "error": { "code": "internal_error", "message": "Something went wrong." } }
+          }
+        }
+      },
+      "UpstreamError": {
+        "description": "The portal returned an unexpected response and no cached copy was available",
+        "content": {
+          "application/json": {
+            "schema": { "$ref": "#/components/schemas/Error" },
+            "example": { "error": { "code": "upstream_error", "message": "The meter portal returned an unexpected response." } }
+          }
+        }
+      },
+      "UpstreamUnavailable": {
+        "description": "The portal is rate limiting or login is failing, and no cached copy was available",
+        "headers": {
+          "Retry-After": { "description": "Seconds to wait before retrying.", "schema": { "type": "integer", "example": 30 } }
+        },
+        "content": {
+          "application/json": {
+            "schema": { "$ref": "#/components/schemas/Error" },
+            "example": { "error": { "code": "upstream_unavailable", "message": "The meter portal is temporarily unavailable. Retry later." } }
+          }
+        }
+      },
+      "UpstreamTimeout": {
+        "description": "The portal did not answer in time and no cached copy was available",
+        "content": {
+          "application/json": {
+            "schema": { "$ref": "#/components/schemas/Error" },
+            "example": { "error": { "code": "upstream_timeout", "message": "The meter portal did not respond in time." } }
+          }
+        }
+      }
+    }
+  }
+}

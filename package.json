@@ -1,0 +1,25 @@
+{
+  "name": "urja-meter-api",
+  "version": "1.0.0",
+  "description": "A clean, documented API over the Urja Meter Ops smart-meter portal",
+  "private": true,
+  "type": "module",
+  "main": "src/server.js",
+  "engines": {
+    "node": ">=20.6"
+  },
+  "scripts": {
+    "start": "node --env-file=.env src/server.js",
+    "dev": "node --watch --env-file=.env src/server.js",
+    "test": "node --test",
+    "smoke": "node --env-file=.env scripts/smoke-portal.js"
+  },
+  "dependencies": {
+    "express": "^5.3.0",
+    "swagger-ui-express": "^5.0.1",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "supertest": "^7.3.1"
+  }
+}
