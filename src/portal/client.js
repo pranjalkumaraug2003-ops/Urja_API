@@ -11,14 +11,19 @@ const SESSION_MAX_AGE_MS = 55 * 60 * 1000;
 // Safety stop for paging through /portal/dts, in case "total" is ever missing or wrong.
 const MAX_DT_PAGES = 50;
 
+// After a 429 we stop calling the portal for this long. The portal sends no Retry-After;
+// recovery took 10 to 25 s in tests, so 30 s is a safe pause (PROTOCOL.md, rate limiting).
+const RATE_LIMIT_COOLDOWN_MS = 30_000;
+
 // One error type for everything that can go wrong with the portal.
 // "kind" is what the HTTP layer uses to choose our status code (D6).
 export class PortalError extends Error {
-  constructor(kind, message, { status, cause } = {}) {
+  constructor(kind, message, { status, cause, retryAfterSeconds } = {}) {
     super(message, { cause });
     this.name = 'PortalError';
     this.kind = kind; // auth_failed | rate_limited | not_found | timeout | unreachable | bad_response
     this.status = status; // the portal's HTTP status, when there was one
+    this.retryAfterSeconds = retryAfterSeconds; // set on rate_limited: how long until we call the portal again
   }
 }
 
@@ -33,6 +38,26 @@ export function createPortalClient({
   let cookieHeader = null; // "name=value; name2=value2", sent on every request
   let loggedInAt = 0;
   let loginInFlight = null; // shared promise, so parallel requests trigger only one login
+  let blockedUntil = 0; // set after a 429: no portal calls before this time
+
+  // Records a 429 and returns the error to throw.
+  function rateLimited(context) {
+    blockedUntil = now() + RATE_LIMIT_COOLDOWN_MS;
+    return new PortalError('rate_limited', `Portal rate limit reached${context}`, {
+      status: 429,
+      retryAfterSeconds: RATE_LIMIT_COOLDOWN_MS / 1000,
+    });
+  }
+
+  // Refuses to call the portal while we are cooling down after a 429.
+  function assertNotBlocked() {
+    const waitMs = blockedUntil - now();
+    if (waitMs > 0) {
+      throw new PortalError('rate_limited', 'Waiting after a portal rate limit', {
+        retryAfterSeconds: Math.ceil(waitMs / 1000),
+      });
+    }
+  }
 
   // Sends one HTTP request and turns network failures into PortalErrors.
   async function send(path, { method = 'GET', query, headers = {}, body } = {}) {
@@ -79,7 +104,7 @@ export function createPortalClient({
       },
       body: new URLSearchParams({ email, password }).toString(),
     });
-    if (res.status === 429) throw new PortalError('rate_limited', 'Portal rate limit reached during login', { status: 429 });
+    if (res.status === 429) throw rateLimited(' during login');
 
     // Login always returns HTTP 200; the real result is in the body.
     const body = await readJson(res, '/login');
@@ -111,6 +136,7 @@ export function createPortalClient({
 
   // Authenticated GET returning parsed JSON. On a session 401 it logs in again and retries once.
   async function getJson(path, { query, headers = {} } = {}, retried = false) {
+    assertNotBlocked();
     await ensureSession();
     const res = await send(path, {
       query,
@@ -127,7 +153,7 @@ export function createPortalClient({
       const kind = body?.error === 'unauthorized' ? 'auth_failed' : 'bad_response';
       throw new PortalError(kind, `Portal rejected ${path}: ${body?.error ?? 'HTTP 401'}`, { status: 401 });
     }
-    if (res.status === 429) throw new PortalError('rate_limited', 'Portal rate limit reached', { status: 429 });
+    if (res.status === 429) throw rateLimited('');
     if (res.status === 404) throw new PortalError('not_found', `Portal has nothing at ${path}`, { status: 404 });
     if (!res.ok) throw new PortalError('bad_response', `Portal returned HTTP ${res.status} for ${path}`, { status: res.status });
 

@@ -83,7 +83,7 @@
       "get": {
         "tags": ["Meters"],
         "summary": "Get energy readings for one meter",
-        "description": "Returns cumulative register readings (kwh, kvah are odometer-style totals, not consumption) plus kwhDelta and kvahDelta, the usage during the interval ending at each timestamp. intervalMinutes is detected from the data (30 or 1440 in the current dataset). Both from and to are required, inclusive, and interpreted in IST; the range may span at most 31 days. A window with no data returns 200 with an empty readings list.",
+        "description": "Returns cumulative register readings (kwh, kvah are odometer-style totals, not consumption) plus kwhDelta and kvahDelta, the usage during the interval ending at each timestamp. intervalMinutes is detected from the data (30 or 1440 in the current dataset). Both from and to are required, inclusive, and interpreted in IST; the range may span at most 31 days. A window with no data returns 200 with an empty readings list. The first reading in the window has kwhDelta and kvahDelta null, because there is no earlier reading in the window to subtract from; to get usage for the first interval, start the window one interval earlier (one day for daily meters). For daily meters, the reading at 00:00 carries the previous day's usage.",
         "operationId": "getMeterEnergy",
         "parameters": [
           { "$ref": "#/components/parameters/MeterId" },

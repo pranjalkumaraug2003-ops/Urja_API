@@ -127,3 +127,17 @@ test('a timeout becomes a timeout PortalError', async () => {
   ]);
   await assert.rejects(client(fetchImpl, { timeoutMs: 20 }).getDts(), (err) => err.kind === 'timeout');
 });
+
+test('after a 429 it stops calling the portal until the cooldown ends', async () => {
+  let clock = 0;
+  const fetchImpl = fakeFetch([LOGIN_OK, () => json({ error: 'rate_limited' }, { status: 429 }), () => json({ data: [], total: 0 })]);
+  const portal = client(fetchImpl, { now: () => clock });
+
+  await assert.rejects(portal.getDts(), (err) => err.kind === 'rate_limited' && err.retryAfterSeconds === 30);
+  clock = 10_000;
+  await assert.rejects(portal.getDts(), (err) => err.kind === 'rate_limited' && err.retryAfterSeconds === 20);
+  assert.equal(fetchImpl.calls.length, 2); // the blocked call never reached the portal
+
+  clock = 30_000;
+  assert.deepEqual(await portal.getDts(), []);
+});

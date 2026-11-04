@@ -217,6 +217,46 @@ A running record of every design decision for the Urja Meter Ops API, with the r
 
 ---
 
+## D10. First reading in an energy window: delta stays null (documented)
+
+**Remember: a window's first reading has no earlier reading inside the window, so its delta is null; we document it instead of fetching an extra day.**
+
+- **Chosen (option a):** keep D4 rule 1 as is. The first reading of every window has `kwhDelta: null` and `kvahDelta: null`. The API docs and README say: to get usage for the first interval, start the window one interval (one day for daily meters) earlier.
+- **Why:** zero extra logic and nothing invented; `null` is honest. The rule is easy to explain and to test.
+- **Rejected (option b):** ask the portal for one extra day before `from` and use that reading only as the baseline. Fills every delta at no extra request cost, but adds hidden behaviour (a reading used but not returned) and about 10 lines plus tests.
+- **Trade-offs (known and accepted):**
+  - A one-day query on a daily meter (363 of 403 meters) returns 1 reading and no usage.
+  - Windows do not add up: two back-to-back windows lose the interval at their boundary.
+  - Clients wanting complete usage must widen the window themselves.
+- **Interview line:** "The first reading in a window has nothing to subtract from, so I return null and document how to get it, rather than silently fetching data outside the requested range. Fetching one extra day is a 10-line change if consumers need it."
+- **Search topics:** cumulative vs interval meter data, fencepost error, API design least surprise.
+
+---
+
+## D11. HTTP layer details settled while coding (refines D2, D6, D8)
+
+**Remember: back off after a 429 instead of retrying, keep serving stale data while the portal is down, and warm the cache at startup.**
+
+- **Chosen:**
+  1. **429 cooldown in the portal client:** after a 429, no portal call is made for 30 s (the portal sends no Retry-After; recovery took 10 to 25 s in tests). Calls in that window fail at once as `rate_limited` with the seconds left, which becomes our `Retry-After`.
+  2. **Refresh backoff in the cache:** a failed background refresh keeps the stale copy and waits 30 s before the next attempt, so a down portal is not hit on every request.
+  3. **Cache bound:** at most 1000 entries; the least recently loaded is evicted first (a `Map` keeps insertion order).
+  4. **Dataset load is sequential** (DTs, then keys, then export), not parallel: about 4 requests, gentler on the shared rate limit.
+  5. **Warm-up at startup:** the server loads meters and DTs once on boot; a failure is logged, not fatal.
+  6. **Status mapping:** `unreachable` and `bad_response` give 502, `timeout` 504, `rate_limited` and `auth_failed` 503 with `Retry-After`, portal `not_found` 404.
+  7. **`/health` does not validate query params** and reports `degraded` until the first load succeeds or when the last portal call failed (a portal 404 for one meter does not count). Data that expired only because nobody asked for it shows `stale: true` but is not degraded.
+  8. **Validation order:** an impossible date (31 February) skips the range checks, so the client sees one clear error, not two.
+- **Why:** each rule protects the portal's rate limit or gives the client one clear answer.
+- **Rejected:**
+  - Retrying immediately after a 429: burns the limit and extends the block.
+  - Parallel loads: faster by a fraction of a second but doubles the burst.
+  - No cache bound: memory could grow with many different energy windows.
+- **Trade-off:** fixed 30 s pauses are a guess at the portal's window. A proper throttle (request spacing) is the robustness step.
+- **Interview line:** "The portal rate limits and sends no Retry-After, so after a 429 I stop calling it for 30 seconds and tell my clients exactly how long to wait. If a refresh fails, they keep getting the last good data, marked stale."
+- **Search topics:** exponential backoff, circuit breaker pattern, LRU cache, Retry-After header, graceful shutdown Node.js.
+
+---
+
 ## Build order (agreed)
 
 1. Core API + PROTOCOL.md + openapi.json + README + reflection (required, fully done)
